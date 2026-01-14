@@ -277,6 +277,15 @@ class MarstekDataUpdateCoordinator(DataUpdateCoordinator):
         # Staleness tracking - track last successful update per category
         self.category_last_updated: dict[str, float] = {}
         self.STALENESS_THRESHOLD = 3  # missed updates before invalidation
+        self.STALENESS_FACTOR = {
+            "battery": UPDATE_INTERVAL_FAST,
+            "es": UPDATE_INTERVAL_FAST,
+            "em": UPDATE_INTERVAL_MEDIUM,
+            "pv": UPDATE_INTERVAL_MEDIUM,
+            "mode": UPDATE_INTERVAL_MEDIUM,
+            "ble": UPDATE_INTERVAL_SLOW,
+            "wifi": UPDATE_INTERVAL_SLOW,
+        }
         self.STATIC_CATEGORIES = {"device", "wifi", "ble", "_diagnostic", "aggregates"}
 
         # Initialize compatibility matrix for version-specific scaling
@@ -393,8 +402,10 @@ class MarstekDataUpdateCoordinator(DataUpdateCoordinator):
         last_update = self.category_last_updated[category]
         elapsed = time.time() - last_update
 
+        category_stale_factor = self.STALENESS_FACTOR.get(category, 1)
+
         # Calculate max age (update interval * threshold)
-        max_age = self.update_interval.total_seconds() * self.STALENESS_THRESHOLD
+        max_age = self.update_interval.total_seconds() * self.STALENESS_THRESHOLD * category_stale_factor
 
         return elapsed < max_age
 
