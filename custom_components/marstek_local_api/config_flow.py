@@ -353,7 +353,7 @@ class OptionsFlow(config_entries.OptionsFlow):
 
     def __init__(self, config_entry: ConfigEntry) -> None:
         """Initialise the options flow."""
-        self.config_entry = config_entry
+        self._config_entry = config_entry
         self._devices: list[dict[str, Any]] = list(config_entry.data.get("devices", []))
         self._discovered_devices: list[dict[str, Any]] = []
 
@@ -407,7 +407,7 @@ class OptionsFlow(config_entries.OptionsFlow):
                 {
                     vol.Optional(
                         "scan_interval",
-                        default=self.config_entry.options.get(
+                        default=self._config_entry.options.get(
                             "scan_interval", DEFAULT_SCAN_INTERVAL
                         ),
                     ): vol.All(vol.Coerce(int), vol.Range(min=15, max=900)),
@@ -447,9 +447,9 @@ class OptionsFlow(config_entries.OptionsFlow):
                 updated_device["device"] = new_name
                 updated_devices[device_index] = updated_device
 
-                new_data = {**self.config_entry.data, "devices": updated_devices}
+                new_data = {**self._config_entry.data, "devices": updated_devices}
                 self.hass.config_entries.async_update_entry(
-                    self.config_entry,
+                    self._config_entry,
                     data=new_data,
                 )
                 self._devices = updated_devices
@@ -514,9 +514,9 @@ class OptionsFlow(config_entries.OptionsFlow):
                 if not updated_devices:
                     errors["base"] = "cannot_remove_last_device"
                 else:
-                    new_data = {**self.config_entry.data, "devices": updated_devices}
+                    new_data = {**self._config_entry.data, "devices": updated_devices}
                     self.hass.config_entries.async_update_entry(
-                        self.config_entry,
+                        self._config_entry,
                         data=new_data,
                     )
                     self._devices = updated_devices
@@ -589,9 +589,9 @@ class OptionsFlow(config_entries.OptionsFlow):
                             "firmware": device["firmware"],
                         }
                     )
-                    new_data = {**self.config_entry.data, "devices": updated_devices}
+                    new_data = {**self._config_entry.data, "devices": updated_devices}
                     self.hass.config_entries.async_update_entry(
-                        self.config_entry,
+                        self._config_entry,
                         data=new_data,
                     )
                     self._devices = updated_devices
@@ -643,9 +643,9 @@ class OptionsFlow(config_entries.OptionsFlow):
                             "firmware": info.get("firmware"),
                         }
                     )
-                    new_data = {**self.config_entry.data, "devices": updated_devices}
+                    new_data = {**self._config_entry.data, "devices": updated_devices}
                     self.hass.config_entries.async_update_entry(
-                        self.config_entry,
+                        self._config_entry,
                         data=new_data,
                     )
                     self._devices = updated_devices
