@@ -478,6 +478,16 @@ class MarstekDataUpdateCoordinator(DataUpdateCoordinator):
                     es_status["bat_power"] = self.compatibility.scale_value(
                         es_status["bat_power"], "bat_power"
                     )
+                elif es_status.get("ongrid_power") is not None:
+                    try:
+                        # Some VenusE firmware versions omit bat_power but report
+                        # battery flow as ongrid_power with the opposite sign.
+                        es_status["bat_power"] = -float(es_status["ongrid_power"])
+                    except (TypeError, ValueError):
+                        _LOGGER.debug(
+                            "Could not derive bat_power from ongrid_power=%r",
+                            es_status.get("ongrid_power"),
+                        )
                 if "total_grid_input_energy" in es_status:
                     es_status["total_grid_input_energy"] = self.compatibility.scale_value(
                         es_status["total_grid_input_energy"], "total_grid_input_energy"

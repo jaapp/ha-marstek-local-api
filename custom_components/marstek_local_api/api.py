@@ -41,6 +41,7 @@ _shared_transports = {}
 _shared_protocols = {}
 _transport_refcounts = {}
 _clients_by_port = {}  # Map port -> list of clients
+_shared_command_locks = {}  # Map port -> asyncio.Lock for serializing command/response cycles
 
 
 class MarstekUDPClient:
@@ -160,6 +161,8 @@ class MarstekUDPClient:
                     del _transport_refcounts[self.port]
                 if self.port in _clients_by_port:
                     del _clients_by_port[self.port]
+                if self.port in _shared_command_locks:
+                    del _shared_command_locks[self.port]
                 _LOGGER.debug("Closed shared UDP socket on port %s", self.port)
             else:
                 _LOGGER.debug(
@@ -219,6 +222,23 @@ class MarstekUDPClient:
         max_attempts: int | None = None,
     ) -> dict | None:
         """Send a command and wait for response."""
+        if not self._connected:
+            await self.connect()
+
+        if self.port not in _shared_command_locks:
+            _shared_command_locks[self.port] = asyncio.Lock()
+
+        async with _shared_command_locks[self.port]:
+            return await self._send_command_locked(method, params, timeout, max_attempts)
+
+    async def _send_command_locked(
+        self,
+        method: str,
+        params: dict | None = None,
+        timeout: int | None = None,
+        max_attempts: int | None = None,
+    ) -> dict | None:
+        """Send a command while holding the shared port lock."""
         if not self._connected:
             await self.connect()
 
