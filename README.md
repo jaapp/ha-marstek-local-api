@@ -83,8 +83,9 @@ After setup you can return to **Settings → Devices & Services → Marstek Loca
 |  | `total_pv_energy` | kWh | Lifetime PV energy | 1x | 60 |
 |  | `total_grid_import` / `total_grid_export` | kWh | Lifetime grid counters | 1x | 60 |
 |  | `total_load_energy` | kWh | Lifetime load energy | 1x | 60 |
-| **Energy meter / CT** | `ct_phase_a_power`, `ct_phase_b_power`, `ct_phase_c_power` | W | Per-phase measurements (if CTs installed) | 5x | 300 |
-|  | `ct_total_power` | W | CT aggregate | 5x | 300 |
+| **Energy meter / CT** | `ct_phase_a_power`, `ct_phase_b_power`, `ct_phase_c_power` | W | Per-phase measurements (if CTs installed) | 1x | 60 |
+|  | `ct_total_power` | W | CT aggregate | 1x | 60 |
+|  | `ct_input_energy` / `ct_output_energy` | kWh | Lifetime CT energy | 1x | 60 |
 | **Mode** | `operating_mode` | text | Current mode (read-only sensor) | 5x | 300 |
 | **PV (Venus D only)** | `pv_power`, `pv_voltage`, `pv_current` | W / V / A | MPPT telemetry | 5x | 300 |
 | **Network** | `wifi_rssi` | dBm | Wi-Fi signal | 10x | 600 |

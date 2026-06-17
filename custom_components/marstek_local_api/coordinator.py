@@ -524,22 +524,32 @@ class MarstekDataUpdateCoordinator(DataUpdateCoordinator):
                 self.category_last_updated["battery"] = time.time()
                 had_success = True
 
+            try:
+                await asyncio.sleep(_command_delay())  # Delay between API calls
+                em_status = await self.api.get_em_status(**_command_kwargs())
+            except Exception as err:
+                _LOGGER.debug("Failed to get EM status: %s", err)
+                em_status = None
+
+            if em_status:
+                if "input_energy" in em_status:
+                    em_status["input_energy"] = self.compatibility.scale_value(
+                        em_status["input_energy"], "ct_energy"
+                    )
+                if "output_energy" in em_status:
+                    em_status["output_energy"] = self.compatibility.scale_value(
+                        em_status["output_energy"], "ct_energy"
+                    )
+                data["em"] = em_status
+                self.category_last_updated["em"] = time.time()
+                had_success = True
+
             # Medium priority - every 5th update (~300s)
             # EM, PV, Mode - slower-changing data
             run_medium = self.update_count == 1 or self.update_count % UPDATE_INTERVAL_MEDIUM == 0
             if is_first_update and not had_success:
                 run_medium = False
             if run_medium:
-                try:
-                    await asyncio.sleep(_command_delay())  # Delay between API calls
-                    em_status = await self.api.get_em_status(**_command_kwargs())
-                    if em_status:
-                        data["em"] = em_status
-                        self.category_last_updated["em"] = time.time()
-                        had_success = True
-                except Exception as err:
-                    _LOGGER.debug("Failed to get EM status: %s", err)
-
                 # Only query PV for Venus D
                 if self.device_model == DEVICE_MODEL_VENUS_D:
                     try:

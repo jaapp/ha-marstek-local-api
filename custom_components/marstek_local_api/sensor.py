@@ -122,7 +122,7 @@ SENSOR_TYPES: tuple[MarstekSensorEntityDescription, ...] = (
     MarstekSensorEntityDescription(
         key="battery_error_code",
         name="Error code",
-        value_fn=lambda data: data.get("battery", {}).get("error_code"),
+        value_fn=lambda data: data.get("_diagnostic", {}).get("bat_last_error"),
         category="battery",
     ),
     MarstekSensorEntityDescription(
@@ -148,7 +148,7 @@ SENSOR_TYPES: tuple[MarstekSensorEntityDescription, ...] = (
         native_unit_of_measurement=UnitOfPower.WATT,
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda data: max(0, data.get("es", {}).get("bat_power", 0) or 0),
+        value_fn=lambda data: max(0, -(data.get("es", {}).get("ongrid_power", 0) or 0)),
         category="es",
     ),
     MarstekSensorEntityDescription(
@@ -157,15 +157,15 @@ SENSOR_TYPES: tuple[MarstekSensorEntityDescription, ...] = (
         native_unit_of_measurement=UnitOfPower.WATT,
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda data: max(0, -(data.get("es", {}).get("bat_power", 0) or 0)),
+        value_fn=lambda data: max(0, data.get("es", {}).get("ongrid_power", 0) or 0),
         category="es",
     ),
     MarstekSensorEntityDescription(
         key="battery_state",
         name="State",
         value_fn=lambda data: (
-            "charging" if (data.get("es", {}).get("bat_power", 0) or 0) > 0
-            else "discharging" if (data.get("es", {}).get("bat_power", 0) or 0) < 0
+            "charging" if (data.get("es", {}).get("ongrid_power", 0) or 0) < 0
+            else "discharging" if (data.get("es", {}).get("ongrid_power", 0) or 0) > 0
             else "idle"
         ),
         category="es",
@@ -277,6 +277,24 @@ SENSOR_TYPES: tuple[MarstekSensorEntityDescription, ...] = (
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
         value_fn=lambda data: data.get("em", {}).get("total_power"),
+        category="em",
+    ),
+    MarstekSensorEntityDescription(
+        key="ct_input_energy",
+        name="CT input energy",
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        value_fn=lambda data: _wh_to_kwh(data.get("em", {}).get("input_energy")),
+        category="em",
+    ),
+    MarstekSensorEntityDescription(
+        key="ct_output_energy",
+        name="CT output energy",
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        value_fn=lambda data: _wh_to_kwh(data.get("em", {}).get("output_energy")),
         category="em",
     ),
     MarstekSensorEntityDescription(

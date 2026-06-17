@@ -657,6 +657,8 @@ async def discover_and_test(target_ip: str | None) -> None:
                     print(f"  Phase B Power:          {format_value(em_status.get('b_power'), ' W')}")
                     print(f"  Phase C Power:          {format_value(em_status.get('c_power'), ' W')}")
                     print(f"  Total Power:            {format_value(em_status.get('total_power'), ' W')}")
+                    print(f"  Input Energy:           {format_value(em_status.get('input_energy'), ' dWh')}")
+                    print(f"  Output Energy:          {format_value(em_status.get('output_energy'), ' dWh')}")
                 else:
                     print("  (No CT connected)")
             else:

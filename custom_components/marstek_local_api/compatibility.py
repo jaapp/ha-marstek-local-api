@@ -102,6 +102,7 @@ class CompatibilityMatrix:
             (HW_VERSION_2, 154): 0.1,    # FW 154+: raw value in deci-°C (÷0.1 = ×10)
             (HW_VERSION_3, 0): 1.0,      # FW 0+: raw value in °C
             (HW_VERSION_3, 139): 10.0,   # FW 0+: raw value in deca-°C (÷10)
+            (HW_VERSION_3, 148): 1.0,   # FW 0+: raw value in °C
         },
 
         # Battery capacity (Wh)
@@ -110,6 +111,7 @@ class CompatibilityMatrix:
             (HW_VERSION_2, 154): 1.0,    # FW 154+: raw value in Wh
             (HW_VERSION_3, 0): 1.0,      # FW 0+: raw value in Wh
             (HW_VERSION_3, 139): 0.1,      # FW 0+: raw value in deci-Wh (÷0.1)
+            (HW_VERSION_3, 148): 1.0,      # FW 0+: raw value in Wh (÷0.1)
         },
 
         # Battery power (W)
@@ -150,6 +152,11 @@ class CompatibilityMatrix:
         "bat_current": {
             (HW_VERSION_2, 0): 100.0,    # All FW: raw in centi-A (÷100)
             (HW_VERSION_3, 0): 100.0,    # All FW: raw in centi-A (÷100)
+        },
+
+        # CT energy input/output (Wh) - ALWAYS scaled by 10
+        "ct_energy": {
+            (HW_VERSION_3, 0): 10,    # All FW: raw in deci-Wh (÷10)
         },
     }
 
@@ -219,11 +226,19 @@ class CompatibilityMatrix:
 
         # If no applicable entry (our FW is older than any defined), return raw value
         if not applicable_entries:
+            _LOGGER.debug(
+                "No scaling entries for %s with hw=%s, using raw value",
+                field, self.hardware_version
+            )
             return value
 
         # Get the entry with the highest firmware version
         selected_fw_ver, divisor = max(applicable_entries, key=lambda x: x[0])
         scaled = value / divisor
+        _LOGGER.debug(
+                "Field %s scaled from %f to %f",
+                field, value, scaled
+            )
 
         return scaled
 
