@@ -76,6 +76,9 @@ def _coordinator_snapshot(coordinator: MarstekDataUpdateCoordinator) -> dict[str
         # Command compatibility matrix
         "command_compatibility": command_stats,
         "compatibility_summary": compatibility_summary,
+
+        # Selected scaling profile (hardware/firmware detection)
+        "compatibility": coordinator.compatibility.get_info(),
     }
 
     return async_redact_data(snapshot, TO_REDACT)

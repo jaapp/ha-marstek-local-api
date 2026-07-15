@@ -13,13 +13,14 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import MarstekAPIError, MarstekUDPClient
-from .compatibility import CompatibilityMatrix
+from .compatibility import CompatibilityMatrix, HW_VERSION_VENUS_A
 from .const import (
     COMMAND_MAX_ATTEMPTS,
     COMMAND_TIMEOUT,
     DEFAULT_SCAN_INTERVAL,
     DEVICE_MODEL_VENUS_D,
     UPDATE_INTERVAL_FAST,
+    UNRESPONSIVE_CYCLE_THRESHOLD,
     UPDATE_INTERVAL_MEDIUM,
     UPDATE_INTERVAL_SLOW,
     METHOD_BATTERY_STATUS,
@@ -27,6 +28,35 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+# Minimum V*I (W) needed before it can arbitrate the string power unit;
+# below this the deci-W/W candidates are too close to tell apart.
+PV_STRING_UNIT_MIN_REFERENCE = 25.0
+
+
+def _scale_pv_string_power(
+    compatibility: CompatibilityMatrix, pv_status: dict, string: int
+) -> float | None:
+    """Return pv{string}_power in W, disambiguating the per-string unit.
+
+    Venus A firmware mixes power units BETWEEN strings of the same response
+    (observed live on fw 148: pv1 in deci-W, pv2 in plain W). String voltage
+    and current are plain V/A, so V*I picks the right interpretation whenever
+    it is large enough to discriminate; otherwise fall back to the
+    compatibility matrix scaling (a few W of error at most, at dawn/dusk).
+    """
+    raw = pv_status.get(f"pv{string}_power")
+    if not isinstance(raw, (int, float)):
+        return None
+    fallback = compatibility.scale_value(raw, "pv_string_power")
+    voltage = pv_status.get(f"pv{string}_voltage")
+    current = pv_status.get(f"pv{string}_current")
+    if not isinstance(voltage, (int, float)) or not isinstance(current, (int, float)):
+        return fallback
+    reference = voltage * current
+    if reference < PV_STRING_UNIT_MIN_REFERENCE:
+        return fallback
+    return min((raw / 10.0, float(raw)), key=lambda candidate: abs(candidate - reference))
 
 
 class MarstekMultiDeviceCoordinator(DataUpdateCoordinator):
@@ -274,6 +304,9 @@ class MarstekDataUpdateCoordinator(DataUpdateCoordinator):
         self._config_entry = config_entry
         self._device_mac = device_mac  # Used for multi-device mode to identify which device to update
 
+        # Circuit breaker state - consecutive cycles without any response
+        self._consecutive_failed_cycles = 0
+
         # Staleness tracking - track last successful update per category
         self.category_last_updated: dict[str, float] = {}
         self.STALENESS_THRESHOLD = 3  # missed updates before invalidation
@@ -372,6 +405,27 @@ class MarstekDataUpdateCoordinator(DataUpdateCoordinator):
             return None
         return int(time.time() - self.last_message_timestamp)
 
+    def _category_poll_multiplier(self, category: str) -> int:
+        """Return the polling tier of a category in multiples of the base interval.
+
+        Must mirror the tiers in _async_update_data: em/mode (and pv on
+        Venus D) are only polled every UPDATE_INTERVAL_MEDIUM cycles, so
+        their staleness window has to be based on that cadence, not the
+        base update interval.
+        """
+        if category in ("es", "battery"):
+            return UPDATE_INTERVAL_FAST
+        if category in ("em", "mode"):
+            return UPDATE_INTERVAL_MEDIUM
+        if category == "pv":
+            # Venus A polls PV every fast cycle to derive battery power;
+            # computed dynamically because the model can change at runtime
+            # (_update_device_version).
+            if self.compatibility.hardware_version == HW_VERSION_VENUS_A:
+                return UPDATE_INTERVAL_FAST
+            return UPDATE_INTERVAL_MEDIUM
+        return 1
+
     def is_category_fresh(self, category: str) -> bool:
         """Check if category data is fresh enough to display.
 
@@ -393,8 +447,12 @@ class MarstekDataUpdateCoordinator(DataUpdateCoordinator):
         last_update = self.category_last_updated[category]
         elapsed = time.time() - last_update
 
-        # Calculate max age (update interval * threshold)
-        max_age = self.update_interval.total_seconds() * self.STALENESS_THRESHOLD
+        # Calculate max age (polling tier interval * threshold)
+        max_age = (
+            self.update_interval.total_seconds()
+            * self._category_poll_multiplier(category)
+            * self.STALENESS_THRESHOLD
+        )
 
         return elapsed < max_age
 
@@ -450,6 +508,35 @@ class MarstekDataUpdateCoordinator(DataUpdateCoordinator):
                 """Back off a little between calls; go faster while probing initial contact."""
                 return 0.2 if is_first_update and not had_success else 1.0
 
+            # Circuit breaker: when the device has answered nothing for several
+            # full cycles its API task is likely wedged. Keep probing with a
+            # single lightweight request per cycle instead of the full tiered
+            # poll with retries - wedged firmware (observed on Venus A fw 148)
+            # can crash and lose its settings under hours of retry pressure.
+            if (
+                not is_first_update
+                and self._consecutive_failed_cycles >= UNRESPONSIVE_CYCLE_THRESHOLD
+            ):
+                try:
+                    await asyncio.sleep(_command_delay())
+                    probe = await self.api.get_es_status(timeout=5, max_attempts=1)
+                except Exception:
+                    probe = None
+                if not probe:
+                    self._consecutive_failed_cycles += 1
+                    if self._consecutive_failed_cycles % 10 == 0:
+                        _LOGGER.warning(
+                            "Device unresponsive for %d polling cycles; polling stays "
+                            "reduced to one probe per cycle",
+                            self._consecutive_failed_cycles,
+                        )
+                    return data
+                _LOGGER.info(
+                    "Device answering again after %d unresponsive cycles; resuming normal polling",
+                    self._consecutive_failed_cycles,
+                )
+                self._consecutive_failed_cycles = 0
+
             if is_first_update:
                 _LOGGER.debug("First update - fetching device info")
                 try:
@@ -494,6 +581,53 @@ class MarstekDataUpdateCoordinator(DataUpdateCoordinator):
                 data["es"] = es_status
                 self.category_last_updated["es"] = time.time()
                 had_success = True
+
+            # Venus A firmware always reports pv_power=0 in ES.GetStatus and omits
+            # bat_power entirely. Poll the PV strings every update and derive both
+            # fields so the power/state/solar sensors work on this model.
+            if es_status and self.compatibility.hardware_version == HW_VERSION_VENUS_A:
+                try:
+                    await asyncio.sleep(_command_delay())  # Delay between API calls
+                    pv_status = await self.api.get_pv_status(**_command_kwargs())
+                except Exception as err:
+                    _LOGGER.debug("Failed to get PV status: %s", err)
+                    pv_status = None
+
+                if pv_status:
+                    # Scale per-string power at receipt (same pattern as the
+                    # battery_status fields below) so sensors and the stale
+                    # fallback path always see final W values.
+                    for n in range(1, 5):
+                        key = f"pv{n}_power"
+                        if key in pv_status:
+                            pv_status[key] = _scale_pv_string_power(
+                                self.compatibility, pv_status, n
+                            )
+                    data["pv"] = pv_status
+                    self.category_last_updated["pv"] = time.time()
+                    had_success = True
+                else:
+                    # Venus A silently drops a large share of requests;
+                    # fall back to the last known (already scaled) string data
+                    pv_status = data.get("pv")
+
+                if pv_status:
+                    known_powers = []
+                    for n in range(1, 5):
+                        string_power = pv_status.get(f"pv{n}_power")
+                        if isinstance(string_power, (int, float)):
+                            known_powers.append(string_power)
+                    if known_powers:
+                        es_status["pv_power"] = sum(known_powers)
+
+                if "bat_power" not in es_status:
+                    ongrid_power = es_status.get("ongrid_power")
+                    if ongrid_power is not None:
+                        pv_power = es_status.get("pv_power") or 0
+                        offgrid_power = es_status.get("offgrid_power") or 0
+                        # Charging positive: PV and grid import feed the battery,
+                        # on-/off-grid output drains it (ongrid is negative on import)
+                        es_status["bat_power"] = pv_power - ongrid_power - offgrid_power
 
             try:
                 await asyncio.sleep(_command_delay())  # Delay between API calls
@@ -608,6 +742,19 @@ class MarstekDataUpdateCoordinator(DataUpdateCoordinator):
                 _LOGGER.warning(
                     "First update did not receive any data from device; continuing setup and retrying in background"
                 )
+
+            # Track consecutive all-failed cycles for the circuit breaker
+            if had_success:
+                self._consecutive_failed_cycles = 0
+            else:
+                self._consecutive_failed_cycles += 1
+                if self._consecutive_failed_cycles == UNRESPONSIVE_CYCLE_THRESHOLD:
+                    _LOGGER.warning(
+                        "No response to any command for %d consecutive cycles; "
+                        "reducing polling to one probe per cycle to avoid "
+                        "pressuring the device",
+                        self._consecutive_failed_cycles,
+                    )
 
             # If we got any new data, update the last message timestamp
             # (We compare with the preserved old data to see if anything changed)

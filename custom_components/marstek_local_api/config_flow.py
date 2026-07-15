@@ -8,13 +8,13 @@ from typing import Any
 import voluptuous as vol
 
 from homeassistant import config_entries
-from homeassistant.components import dhcp
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST
 from homeassistant.core import HomeAssistant
-from homeassistant.data_entry_flow import FlowResult
+from homeassistant.data_entry_flow import AbortFlow, FlowResult
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.service_info.dhcp import DhcpServiceInfo
 
 from .api import MarstekAPIError, MarstekUDPClient
 from .const import CONF_PORT, DATA_COORDINATOR, DEFAULT_PORT, DEFAULT_SCAN_INTERVAL, DOMAIN
@@ -271,6 +271,10 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     },
                 )
 
+            except AbortFlow:
+                # _abort_if_unique_id_configured() signals "already configured"
+                # by raising; it must not be treated as an error.
+                raise
             except CannotConnect:
                 errors["base"] = "cannot_connect"
             except Exception:  # pylint: disable=broad-except
@@ -284,7 +288,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
 
     async def async_step_dhcp(
-        self, discovery_info: dhcp.DhcpServiceInfo
+        self, discovery_info: DhcpServiceInfo
     ) -> FlowResult:
         """Handle DHCP discovery."""
         # Extract info from DHCP discovery
@@ -320,6 +324,11 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
             return await self.async_step_discovery_confirm()
 
+        except AbortFlow:
+            # _abort_if_unique_id_configured() signals "already configured"
+            # by raising; every DHCP lease renewal of a configured device
+            # lands here, so it must not be logged as an error.
+            raise
         except CannotConnect:
             return self.async_abort(reason="cannot_connect")
         except Exception:  # pylint: disable=broad-except

@@ -8,6 +8,9 @@
   "dhcp": [
     {
       "macaddress": "60CF84*"
+    },
+    {
+      "macaddress": "2CF8EC*"
     }
   ],
   "documentation": "https://github.com/jaapp/ha-marstek-local-api",

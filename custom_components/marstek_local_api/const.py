@@ -27,6 +27,11 @@ COMMAND_BACKOFF_FACTOR: Final = 2.0  # Multiplier for successive backoff delays
 COMMAND_BACKOFF_MAX: Final = 12.0  # Upper bound on backoff delay
 COMMAND_BACKOFF_JITTER: Final = 0.4  # Additional random jitter for backoff
 UNAVAILABLE_THRESHOLD: Final = 120  # Seconds before marking device unavailable
+# Circuit breaker: after this many consecutive update cycles without a single
+# response, reduce polling to one lightweight probe per cycle. Firmware whose
+# API task has wedged (observed on Venus A fw 148) can crash and lose its
+# settings when full retry barrages continue for hours.
+UNRESPONSIVE_CYCLE_THRESHOLD: Final = 3
 
 # API Methods
 METHOD_GET_DEVICE: Final = "Marstek.GetDevice"
@@ -59,6 +64,10 @@ ERROR_INVALID_PARAMS: Final = -32602
 ERROR_INTERNAL_ERROR: Final = -32603
 
 # Device models
+# NOTE: Venus A firmware reports "Venus A" (with a space) in Marstek.GetDevice,
+# so model checks must go through compatibility.parse_hardware_version()
+# rather than comparing against these constants directly.
+DEVICE_MODEL_VENUS_A: Final = "VenusA"
 DEVICE_MODEL_VENUS_C: Final = "VenusC"
 DEVICE_MODEL_VENUS_D: Final = "VenusD"
 DEVICE_MODEL_VENUS_E: Final = "VenusE"
@@ -109,4 +118,4 @@ WEEKDAY_MAP: Final = {
     "sun": 64,  # 1000000
 }
 WEEKDAYS_ALL: Final = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
-MAX_SCHEDULE_SLOTS: Final = 10  # Venus C/E supports slots 0-9
+MAX_SCHEDULE_SLOTS: Final = 10  # Venus C/E support slots 0-9 (verified on Venus A fw 148 as well)

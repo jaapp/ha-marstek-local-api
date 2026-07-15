@@ -3,7 +3,7 @@
 > **Firmware warning:** Marstek’s Local API firmware is still immature, so most glitches originate in the batteries, not here.
 > Report issues to Marstek unless you can clearly trace them to this project.
 
-Home Assistant integration that talks directly to Marstek Venus C/D/E batteries over the official Local API. It delivers local-only telemetry, mode control, and fleet-wide aggregation without relying on the Marstek cloud.
+Home Assistant integration that talks directly to Marstek Venus A/C/D/E batteries over the official Local API. It delivers local-only telemetry, mode control, and fleet-wide aggregation without relying on the Marstek cloud.
 
 ---
 
@@ -72,21 +72,23 @@ After setup you can return to **Settings → Devices & Services → Marstek Loca
 |  | `battery_capacity` | kWh | Remaining capacity | 1x | 60 |
 |  | `battery_rated_capacity` | kWh | Rated pack capacity | 1x | 60 |
 |  | `battery_available_capacity` | kWh | Estimated energy still available before full charge | 1x | 60 |
-|  | `battery_voltage` | V | Pack voltage | 1x | 60 |
-|  | `battery_current` | A | Pack current (positive = charge) | 1x | 60 |
-| **Energy system (ES)** | `battery_power` | W | Pack power (positive = charge) | 1x | 60 |
+|  | `battery_voltage` | V | Pack voltage (not reported by Venus A) | 1x | 60 |
+|  | `battery_current` | A | Pack current (positive = charge; not reported by Venus A) | 1x | 60 |
+| **Energy system (ES)** | `battery_power` | W | Pack power (positive = charge; derived from PV/grid flows on Venus A) | 1x | 60 |
 |  | `battery_power_in` / `battery_power_out` | W | Split charge/discharge power | 1x | 60 |
 |  | `battery_state` | text | `charging` / `discharging` / `idle` | 1x | 60 |
 |  | `grid_power` | W | Grid import/export (positive = import) | 1x | 60 |
 |  | `offgrid_power` | W | Off-grid load | 1x | 60 |
-|  | `pv_power_es` | W | Solar production reported via ES | 1x | 60 |
-|  | `total_pv_energy` | kWh | Lifetime PV energy | 1x | 60 |
+|  | `pv_power_es` | W | Solar production reported via ES (on Venus A: sum of the PV strings) | 1x | 60 |
+|  | `total_pv_energy` | kWh | Lifetime PV energy (Venus A firmware reports 0 — disabled by default there) | 1x | 60 |
 |  | `total_grid_import` / `total_grid_export` | kWh | Lifetime grid counters | 1x | 60 |
-|  | `total_load_energy` | kWh | Lifetime load energy | 1x | 60 |
+|  | `total_load_energy` | kWh | Lifetime load energy (Venus A firmware reports 0 — disabled by default there) | 1x | 60 |
 | **Energy meter / CT** | `ct_phase_a_power`, `ct_phase_b_power`, `ct_phase_c_power` | W | Per-phase measurements (if CTs installed) | 5x | 300 |
 |  | `ct_total_power` | W | CT aggregate | 5x | 300 |
 | **Mode** | `operating_mode` | text | Current mode (read-only sensor) | 5x | 300 |
 | **PV (Venus D only)** | `pv_power`, `pv_voltage`, `pv_current` | W / V / A | MPPT telemetry | 5x | 300 |
+| **PV strings (Venus A only)** | `pv1_power` … `pv4_power`, `pv1_voltage` … `pv4_voltage` | W / V | Per-string MPPT telemetry. Firmware reports string power in different units per string; the integration resolves this against V×I (current omitted: integer-A resolution) | 1x | 60 |
+| **Integrated energy (Venus A only)** | `pv_energy_integrated`, `battery_energy_in_integrated`, `battery_energy_out_integrated` | kWh | Solar / charged / discharged energy accumulated from the derived powers (firmware counters are unusable on Venus A); survive restarts | 1x | 60 |
 | **Network** | `wifi_rssi` | dBm | Wi-Fi signal | 10x | 600 |
 |  | `wifi_ssid`, `wifi_ip`, `wifi_gateway`, `wifi_subnet`, `wifi_dns` | text | Wi-Fi configuration | 10x | 600 |
 | **Device info** | `device_model`, `firmware_version`, `ble_mac`, `wifi_mac`, `device_ip` | text | Identification fields | 10x | 600 |
@@ -266,6 +268,22 @@ automation:
       custom_components.marstek_local_api: debug
   ```
 
+### Energy dashboard (charged / discharged energy)
+
+No Marstek firmware exposes lifetime *battery* charge/discharge counters — the
+`total_grid_import`/`total_grid_export` counters only cover the AC side, so on
+models with MPPT inputs (Venus A/D) they miss energy charged directly from
+solar. To feed the energy dashboard's battery section, create two
+[Riemann sum integral helpers](https://www.home-assistant.io/integrations/integration/)
+(Settings → Devices & services → Helpers → Integral):
+
+- *Energy going in to the battery*: integrate `sensor.<device>_power_in` (method *Left*, unit prefix *k*)
+- *Energy coming out of the battery*: integrate `sensor.<device>_power_out` (method *Left*, unit prefix *k*)
+
+**Venus A needs no helpers**: the integration ships integrated counters —
+battery section: `battery_energy_in_integrated` / `battery_energy_out_integrated`,
+solar section: `pv_energy_integrated`.
+
 ## API maturity & known issues
 
 Note: the Marstek Local API is still relatively new and evolving. Behavior can vary between hardware revisions (v2/v3) and firmware versions (EMS and BMS). When reporting issues, always include diagnostic data (logs and the integration's diagnostic fields).
@@ -280,6 +298,13 @@ Known issues:
  - Energy counters / capacity fields may be reported in Wh instead of kWh on certain firmware (values appear 1000× off).
  - `ES.GetStatus` can be unresponsive on some Venus E v3 firmwares (reported on v137 / v139).
  - CT connection state may be reported as "disconnected" / power values might not be updated even when a CT is connected (appears fixed in HW v2 firmware v154+).
+
+Venus A specifics (observed on firmware v148):
+- The device silently drops a large share of UDP requests (no error reply). The integration's retries usually get through, but occasional command timeouts and rejected writes (`set_result: false` while the device is busy) are normal — retry the service call.
+- `ES.GetStatus` does not include `bat_power` and always reports `pv_power`/`total_pv_energy` as 0. The integration derives battery power and solar power from `PV.GetStatus` and the grid flows instead.
+- `Bat.GetStatus` has no voltage/current/error-code fields, and `EM.GetStatus` has no `parse_state` — the corresponding entities are not created for Venus A.
+- `PV.GetStatus` reports string power in different units per string (observed: pv1 in deci-W, pv2 in plain W on the same response). The integration cross-checks each string against its voltage × current to pick the right unit.
+- The `wifi_mac` reported by the device can be the MAC of your access point rather than the battery's own WiFi module.
 
 Most of these issues are resolved by updating the device to the latest firmware — Marstek staggers rollouts, so many systems still run older versions. The Local API is evolving quickly and should stabilise as updates are deployed.
 

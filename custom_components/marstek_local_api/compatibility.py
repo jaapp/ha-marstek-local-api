@@ -27,6 +27,8 @@ HARDWARE VERSIONS:
 ------------------
 - HW 2.0: Original hardware (e.g., "VenusE")
 - HW 3.0: Newer hardware (e.g., "VenusE 3.0")
+- HW "A": Venus A ("Venus A"/"VenusA") — reports plain units (W/Wh/°C);
+  per-string PV power from PV.GetStatus is in deci-W
 
 All defaults are explicit in the matrix for maintainability.
 """
@@ -41,6 +43,7 @@ _LOGGER = logging.getLogger(__name__)
 # Hardware version detection
 HW_VERSION_2: Final = "2.0"
 HW_VERSION_3: Final = "3.0"
+HW_VERSION_VENUS_A: Final = "A"
 
 
 def parse_hardware_version(device_model: str) -> str:
@@ -50,9 +53,14 @@ def parse_hardware_version(device_model: str) -> str:
         "VenusE" -> "2.0"
         "VenusE 3.0" -> "3.0"
         "VenusD" -> "2.0"
+        "Venus A" -> "A"
     """
     if not device_model:
         return HW_VERSION_2
+
+    # Venus A reports plain units (W/Wh/°C) and needs its own matrix entries
+    if re.sub(r'\s+', '', device_model).lower().startswith("venusa"):
+        return HW_VERSION_VENUS_A
 
     # Check for explicit version in model name
     match = re.search(r'(\d+\.\d+)', device_model)
@@ -102,6 +110,7 @@ class CompatibilityMatrix:
             (HW_VERSION_2, 154): 0.1,    # FW 154+: raw value in deci-°C (÷0.1 = ×10)
             (HW_VERSION_3, 0): 1.0,      # FW 0+: raw value in °C
             (HW_VERSION_3, 139): 10.0,   # FW 0+: raw value in deca-°C (÷10)
+            (HW_VERSION_VENUS_A, 0): 1.0,  # Venus A: raw value in °C
         },
 
         # Battery capacity (Wh)
@@ -110,6 +119,7 @@ class CompatibilityMatrix:
             (HW_VERSION_2, 154): 1.0,    # FW 154+: raw value in Wh
             (HW_VERSION_3, 0): 1.0,      # FW 0+: raw value in Wh
             (HW_VERSION_3, 139): 0.1,      # FW 0+: raw value in deci-Wh (÷0.1)
+            (HW_VERSION_VENUS_A, 0): 1.0,  # Venus A: raw value in Wh
         },
 
         # Battery power (W)
@@ -117,6 +127,7 @@ class CompatibilityMatrix:
             (HW_VERSION_2, 0): 10.0,     # FW 0-153: raw value in deca-W (÷10)
             (HW_VERSION_2, 154): 1.0,    # FW 154+: raw value in W
             (HW_VERSION_3, 0): 1.0,      # FW 0+: raw value in W
+            (HW_VERSION_VENUS_A, 0): 1.0,  # Venus A: synthesized value in W
         },
 
         # Grid import energy (Wh)
@@ -124,6 +135,7 @@ class CompatibilityMatrix:
             (HW_VERSION_2, 0): 0.1,      # FW 0-153: raw × 10 = Wh (÷0.1)
             (HW_VERSION_2, 154): 0.01,   # FW 154+: raw × 100 = Wh (÷0.01)
             (HW_VERSION_3, 0): 1.0,      # FW 0+: raw value in Wh
+            (HW_VERSION_VENUS_A, 0): 1.0,  # Venus A: raw value in Wh
         },
 
         # Grid export energy (Wh)
@@ -131,6 +143,7 @@ class CompatibilityMatrix:
             (HW_VERSION_2, 0): 0.1,      # FW 0-153: raw × 10 = Wh (÷0.1)
             (HW_VERSION_2, 154): 0.01,   # FW 154+: raw × 100 = Wh (÷0.01)
             (HW_VERSION_3, 0): 1.0,      # FW 0+: raw value in Wh
+            (HW_VERSION_VENUS_A, 0): 1.0,  # Venus A: raw value in Wh
         },
 
         # Load energy (Wh)
@@ -138,6 +151,13 @@ class CompatibilityMatrix:
             (HW_VERSION_2, 0): 0.1,      # FW 0-153: raw × 10 = Wh (÷0.1)
             (HW_VERSION_2, 154): 0.01,   # FW 154+: raw × 100 = Wh (÷0.01)
             (HW_VERSION_3, 0): 1.0,      # FW 0+: raw value in Wh
+            (HW_VERSION_VENUS_A, 0): 1.0,  # Venus A: raw value in Wh
+        },
+
+        # Per-string PV power from PV.GetStatus (W)
+        # Venus A reports deci-W: pv1_power=3415 at 41V/8.3A (= 341.5 W)
+        "pv_string_power": {
+            (HW_VERSION_VENUS_A, 0): 10.0,
         },
 
         # Battery voltage (V) - ALWAYS scaled by 100
