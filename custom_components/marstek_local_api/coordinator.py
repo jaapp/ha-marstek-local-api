@@ -44,6 +44,7 @@ class MarstekMultiDeviceCoordinator(DataUpdateCoordinator):
         self.device_coordinators: dict[str, MarstekDataUpdateCoordinator] = {}
         self.update_count = 1
         self._config_entry = config_entry
+        self._unavailable_energy_counters: dict[str, set[str]] = {}
 
         super().__init__(
             hass,
@@ -97,15 +98,62 @@ class MarstekMultiDeviceCoordinator(DataUpdateCoordinator):
             return self.device_coordinators[mac].data or {}
         return {}
 
+    def _sum_energy_counter(
+        self,
+        device_data: list[tuple[str, dict[str, Any]]],
+        aggregate_key: str,
+        counter_key: str,
+    ) -> int | float | None:
+        """Sum a cumulative energy counter when every device value is available."""
+        unavailable_macs = [
+            mac
+            for mac, data in device_data
+            if not isinstance(
+                data.get("es", {}).get(counter_key),
+                (int, float),
+            )
+            or isinstance(data.get("es", {}).get(counter_key), bool)
+        ]
+        previous_unavailable_macs = self._unavailable_energy_counters.get(
+            aggregate_key,
+            set(),
+        )
+
+        if unavailable_macs:
+            unavailable_macs_set = set(unavailable_macs)
+            if unavailable_macs_set != previous_unavailable_macs:
+                _LOGGER.warning(
+                    "Aggregate %s unavailable: counter %s missing or invalid for "
+                    "device(s) %s; returning None instead of treating missing "
+                    "lifetime energy as zero",
+                    aggregate_key,
+                    counter_key,
+                    ", ".join(unavailable_macs),
+                )
+            self._unavailable_energy_counters[aggregate_key] = unavailable_macs_set
+            return None
+
+        if previous_unavailable_macs:
+            _LOGGER.info(
+                "Aggregate %s available again after counter %s recovered for "
+                "device(s) %s",
+                aggregate_key,
+                counter_key,
+                ", ".join(sorted(previous_unavailable_macs)),
+            )
+            self._unavailable_energy_counters.pop(aggregate_key, None)
+
+        return sum(data["es"][counter_key] for _, data in device_data)
+
     def _calculate_aggregates(self) -> dict[str, Any]:
         """Calculate aggregate values across all devices."""
         aggregates = {}
 
         # Collect data from all devices
-        all_device_data = []
+        all_device_data: list[tuple[str, dict[str, Any]]] = []
         for mac, coordinator in self.device_coordinators.items():
             if coordinator.data:
-                all_device_data.append(coordinator.data)
+                all_device_data.append((mac, coordinator.data))
 
         if not all_device_data:
             return aggregates
@@ -113,26 +161,26 @@ class MarstekMultiDeviceCoordinator(DataUpdateCoordinator):
         # Power aggregates
         total_power = sum(
             d.get("es", {}).get("bat_power", 0) or 0
-            for d in all_device_data
+            for _, d in all_device_data
         )
         aggregates["total_battery_power"] = total_power
         aggregates["total_power_in"] = sum(
             max(0, d.get("es", {}).get("bat_power", 0) or 0)
-            for d in all_device_data
+            for _, d in all_device_data
         )
         aggregates["total_power_out"] = sum(
             max(0, -(d.get("es", {}).get("bat_power", 0) or 0))
-            for d in all_device_data
+            for _, d in all_device_data
         )
 
         # Capacity aggregates
         aggregates["total_rated_capacity"] = sum(
             d.get("battery", {}).get("rated_capacity", 0) or 0
-            for d in all_device_data
+            for _, d in all_device_data
         )
         aggregates["total_remaining_capacity"] = sum(
             d.get("battery", {}).get("bat_capacity", 0) or 0
-            for d in all_device_data
+            for _, d in all_device_data
         )
 
         # Calculate weighted average SOC
@@ -141,7 +189,7 @@ class MarstekMultiDeviceCoordinator(DataUpdateCoordinator):
             weighted_soc = sum(
                 (d.get("battery", {}).get("soc", 0) or 0) *
                 (d.get("battery", {}).get("rated_capacity", 0) or 0)
-                for d in all_device_data
+                for _, d in all_device_data
             )
             aggregates["average_soc"] = weighted_soc / total_capacity
         else:
@@ -158,7 +206,7 @@ class MarstekMultiDeviceCoordinator(DataUpdateCoordinator):
         # Combined state
         power_values = [
             d.get("es", {}).get("bat_power", 0) or 0
-            for d in all_device_data
+            for _, d in all_device_data
         ]
         charging_flags = [p > 0 for p in power_values]
         discharging_flags = [p < 0 for p in power_values]
@@ -185,31 +233,33 @@ class MarstekMultiDeviceCoordinator(DataUpdateCoordinator):
         # Energy aggregates
         aggregates["total_pv_energy"] = sum(
             d.get("es", {}).get("total_pv_energy", 0) or 0
-            for d in all_device_data
+            for _, d in all_device_data
         )
-        aggregates["total_grid_import"] = sum(
-            d.get("es", {}).get("total_grid_input_energy", 0) or 0
-            for d in all_device_data
+        aggregates["total_grid_import"] = self._sum_energy_counter(
+            all_device_data,
+            "total_grid_import",
+            "total_grid_input_energy",
         )
-        aggregates["total_grid_export"] = sum(
-            d.get("es", {}).get("total_grid_output_energy", 0) or 0
-            for d in all_device_data
+        aggregates["total_grid_export"] = self._sum_energy_counter(
+            all_device_data,
+            "total_grid_export",
+            "total_grid_output_energy",
         )
         aggregates["total_load_energy"] = sum(
             d.get("es", {}).get("total_load_energy", 0) or 0
-            for d in all_device_data
+            for _, d in all_device_data
         )
         aggregates["total_solar_power"] = sum(
             d.get("es", {}).get("pv_power", 0) or 0
-            for d in all_device_data
+            for _, d in all_device_data
         )
         aggregates["total_grid_power"] = sum(
             d.get("es", {}).get("ongrid_power", 0) or 0
-            for d in all_device_data
+            for _, d in all_device_data
         )
         aggregates["total_offgrid_power"] = sum(
             d.get("es", {}).get("offgrid_power", 0) or 0
-            for d in all_device_data
+            for _, d in all_device_data
         )
 
         return aggregates
