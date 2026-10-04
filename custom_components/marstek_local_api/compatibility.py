@@ -153,6 +153,24 @@ class CompatibilityMatrix:
         },
     }
 
+    # ============================================================================
+    # MODEL OVERRIDES
+    # ============================================================================
+    # Some models use different units than the Venus E firmware the matrix above
+    # is based on, regardless of firmware version. Keys are base models with
+    # spaces removed (the device reports e.g. "Venus D"); values are divisors and
+    # take precedence over SCALING_MATRIX.
+    # ============================================================================
+
+    MODEL_OVERRIDES: dict[str, dict[str, float]] = {
+        # Venus D (FW 142): bat_temp 242 -> 24.2 °C,
+        # bat_capacity 856 at 83% SOC of 10240 Wh rated -> 8560 Wh
+        "VenusD": {
+            "bat_temp": 10.0,       # raw value in deci-°C (÷10)
+            "bat_capacity": 0.1,    # raw value in deca-Wh (÷0.1)
+        },
+    }
+
     def __init__(self, device_model: str, firmware_version: int) -> None:
         """Initialize compatibility matrix for a specific device.
 
@@ -188,6 +206,10 @@ class CompatibilityMatrix:
         """
         if value is None:
             return None
+
+        override = self.MODEL_OVERRIDES.get(self.base_model.replace(" ", ""), {})
+        if field in override:
+            return value / override[field]
 
         # If field not in matrix, return raw value (no scaling needed)
         if field not in self.SCALING_MATRIX:
